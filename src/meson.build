@@ -81,6 +81,9 @@ sources = files(
   'utils/parser.vala',
   'utils/system.vala',
   'utils/i18n.vala',
+
+  'models/optiscaler-manager.vala',
+  'utils/launch-options.vala',
 )
 
 deps = [
