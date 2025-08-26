@@ -185,3 +185,13 @@ Set `G_MESSAGES_DEBUG=all` for verbose logging. Key debug points:
 - HTTP request/response cycles
 - File system operations
 - Model data loading sequences
+
+## Implementation Plan Maintenance (OptiScaler & Other Features)
+The file `implementation-plan.md` is the single source of truth for feature state (especially the OptiScaler integration). Every substantive code change touching those features MUST:
+1. Read the current plan before coding.
+2. Update progress checkboxes, add or retire tasks, and capture new risks/decisions within the same commit/PR.
+3. Reflect discovered bugs (e.g. extraction root normalization) as explicit tasks.
+4. Refuse to mark tasks done without build + minimal runtime validation or tests (when tests exist).
+
+AI agents: Before starting modifications related to OptiScaler (or any planned feature), re-open the plan, list the tasks you will touch, and confirm updates after edits. If a discrepancy is found between code and plan, prioritize reconciling the plan first.
+

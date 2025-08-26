@@ -157,7 +157,7 @@ Testing Approach: Start with pure-string utilities (override merge) then add tes
 - Edge cases & safeguards
 - Testing strategy (unit-ish components + manual QA steps)
 
-## Progress Update (Aug 25 2025 – refreshed after Phase 1b commit)
+## Progress Update (Aug 26 2025 – refreshed after Phase 1c partial implementation)
 Legend: [x] done, [~] partial/in progress, [ ] pending.
 
 Core Foundations:
@@ -173,15 +173,15 @@ Core Foundations:
 - [x] State persistence (JSON file with per‑game entry).
 - [x] INI spoof toggle application (Dxgi=false when disabled).
 - [x] Alternate injection filename selection UI (dropdown).
-- [~] Hash capture (dll SHA256 stored) – version still null; no conflict hash comparison yet.
-- [ ] Advanced detection (version extraction, Unreal exe scan, conflict detection) – pending.
-- [ ] Support file deployment beyond core dll + ini (supporting libs & directories) – deferred.
+- [x] Hash capture (dll SHA256 stored) with conflict hash comparison (sets State.conflict if mismatch).
+- [x] Advanced detection: version extraction from release tag, Unreal *Shipping.exe directory heuristic (exe_dir persisted), conflict detection via hash.
+- [x] Support file deployment: bundled support DLLs + directories copied; installed file list persisted for cleanup.
 
 Technical Debt / TODOs:
-- Version extraction (use release tag) & store in state.
-- Add Unreal exe path detection + store exe_dir (currently just installdir).
-- Conflict detection: compare existing injection dll hash vs stored.
-- Support libs deployment (libxess, nvapi64, etc.) + selective cleanup on removal.
+- (DONE) Version extraction (release tag parsed & stripped leading 'v').
+- (DONE) Unreal exe path detection (heuristic Shipping.exe scan) + exe_dir persisted.
+- (DONE) Conflict detection: hash mismatch flagged; UI shows warning (force install UX still pending).
+- (DONE) Support libs deployment (libxess, nvapi64, amd_fidelityfx*, amdxcffx64, dllssg_to_fsr3, fakenvapi.ini, D3D12_Optiscaler/, DlssOverrides/). Cleanup uses recorded installed_files.
 - Improve error reporting (structured codes surfaced in dialog, not only toast).
 - Deployment validation (expected file sizes / existence checks for optional libs).
 - Unit tests: backup/restore, removal idempotence, ini spoof edit, state round‑trip.
@@ -194,24 +194,32 @@ Risk Notes (Updated):
 - Lack of supporting libs deployment may reduce effectiveness for some games.
 - Override rollback logic assumes original_launch_options hasn't changed externally.
 
-Next Immediate Steps (Phase 1c):
-1. Executable path heuristics (Unreal, launcher rewrites) + persist exe_dir. [ ]
-2. Version/tag extraction from release JSON stored in state (update existing entries). [ ]
-3. Support file deployment & restoration (libs + dll list) with cautious pattern-based removal. [ ]
-4. Conflict / foreign mod detection using stored hash vs current; surface warning + force install option. [ ]
-5. Unit tests for ini spoof, backup/restore, override rollback. [ ]
-6. Error reporting improvements (structured last_error codes + UI detail). [ ]
-7. Warning cleanup (remove unreachable catches, adjust property mutability). [ ]
+Next Immediate Steps (Phase 1c – remaining / newly discovered):
+1. Normalize extraction root (current bug: extract helper may return first file path; adjust earlier in install or fix helper) – IN PROGRESS (temporary dirname fallback added, needs verification & potential upstream helper fix).
+2. Force install UX for conflict state (button + confirmation) – PENDING.
+3. Structured error codes surfaced in dialog (currently last_error string only) – PENDING.
+4. Unit tests: ini spoof toggle, backup/restore, removal idempotence, conflict detection, exe_dir heuristic – PENDING.
+5. Warning cleanup (unreachable catches, variable naming) – PENDING.
+6. Launch options cleanup refinement (only remove our override entry) – PENDING.
+7. Improve deployment validation (assert presence of core dll + ini after deploy, verify at least one support lib copied) – PENDING.
+8. Add state migration for existing entries lacking version/exe_dir (retroactive fill on next detect) – PENDING.
+9. Provide stable vs bleeding-edge toggle (currently only bleeding-edge path) – PENDING.
+10. Add optional progress staging / progress bar in dialog instead of single spinner – PENDING.
 
 Planned Later (Phase 2+):
-- Expand detection heuristics (Unreal exe scan) + per-game exe selection.
-- Advanced conflict detection (hash other mod dll; warn user).
-- Support file deployment for additional bundled libs and cleanup logic on removal.
-- Rich error surface (detail label in dialog) + retry button.
+- Per-game exe selection UI when multiple candidates found (current heuristic auto-picks first match).
+- Advanced conflict resolution (identify known foreign mods like ReShade by hash/pattern).
+- Rich error surface (detail label improvements, retry with incremental backoff).
+- Stable vs bleeding-edge selection + update check & upgrade path.
+- Non-Steam launcher support.
 
 Quality Gates Status (Current):
-- Build: Passing (warnings: unhandled GLib.Error in dialog install/remove calls, unreachable catch clauses in manager—safe but to clean up).
-- Tests: Launch options test passing; no new tests yet for install/remove.
+- Build: Passing (warnings persist: unreachable catch clauses in manager; to be cleaned once logic stable).
+- Runtime: Install failing due to extraction root normalization bug (treats file as directory) – FIX IN PROGRESS.
+- Tests: Launch options test passing; no tests yet for OptiScaler manager.
+
+Maintenance Directive:
+Any code change impacting OptiScaler integration MUST update this plan within the same PR/commit (progress checklist, new tasks, resolved risks). The AI agent and contributors should always read and sync this section before starting related work. Missing updates should block merge until reconciled.
 
 Open Items (Active):
 - User-facing messaging for backup creation (toast vs inline note) – pending.
