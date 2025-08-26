@@ -1,11 +1,144 @@
-Fetching external references (OptiScaler wiki + setup script + Decky Framegen script) to ground an implementation plan. I'll refetch external pages correctly by including a query string to extract core content about install steps. Drafting an implementation blueprint for OptiScaler integration—below is a structured, end‑to‑end plan you can refine before we start coding.
+example of install of opti automation
+https://github.com/xXJSONDeruloXx/Decky-Framegen/blob/main/defaults/assets/fgmod.sh
+
+example of unpatching a game aka uninstalling opti from the game
+
+https://github.com/xXJSONDeruloXx/Decky-Framegen/blob/main/defaults/assets/fgmod-uninstaller.sh
+
+discussion on this feature:
+
+Vysp3r
+ProtonPlus
+[FEATURE] Add the ability to easily setup OptiScaler for games #436
+Open
+@Vysp3r
+Description
+Vysp3r
+opened on Jun 30 · edited by Vysp3r
+Owner
+In short you just run OptiScaler Setup.bat in the prefix.
+
+https://github.com/optiscaler/OptiScaler/wiki/Automated-Installation
+
+https://github.com/optiscaler/OptiScaler/blob/master/setup_linux.sh
+
+Linux users should add renamed dll to overrides: WINEDLLOVERRIDES=dxgi=n,b %COMMAND% 
+
+Activity
+
+Vysp3r
+added 
+enhancement
+New feature or request
+ on Jun 30
+xXJSONDeruloXx
+xXJSONDeruloXx commented on Jul 7
+xXJSONDeruloXx
+on Jul 7
+Hey! would love to see this implemented. FYI I recently got a PR accepted to have a linux .sh installer bundled, its in the nightlies and should be in next latest release:
+
+optiscaler/OptiScaler#544
+
+also for automations for finding the right paths and installing the files with handling for various renames needed I suggest you check out my project for decky-optiscaler:
+
+https://github.com/xXJSONDeruloXx/decky-optiscaler
+
+and also, optiscaler-bleeding-edge, which I use to automate build and bundle of optiscaler and its semi-vital external libraries, especially for AMD gpu that are so common on linux:
+
+https://github.com/xXJSONDeruloXx/OptiScaler-Bleeding-Edge
+
+(you will probably want to use the BUNDLED_ version .7z from the latest release for the best automation)
+
+Hope this helps! Let me know how I could attempt to support this feature if you can prioritize
+
+Vysp3r
+Vysp3r commented on Jul 7
+Vysp3r
+on Jul 7
+Owner
+Author
+@xXJSONDeruloXx Yeah I saw that they added a .sh file which was really nice to see.
+
+I will def check out your project once I will start working on this.
+
+I basically just download your bundle and extract it to make it work?
+That's what I understand from your release description.
+
+xXJSONDeruloXx
+xXJSONDeruloXx commented on Jul 7
+xXJSONDeruloXx
+on Jul 7
+Right, the bundled zip has fakenvapi, the dlss3-to-fsr3 DLL, Nvidia sdk extracted DLL auto renamed in the workflow, and FSR 4 DLL extracted from AMD sdk in build.
+
+The main thing you'll need to do is extract all those files to the game execution path (not just the root of the game folder in most cases, like where Steam takes you when you choose "open game files")
+
+Everything else is renamed and in its right place except the OptiScaler.DLL which you'll want to set to one of 8 renames, most typically dxgi.DLL
+
+Also, might want to sed a few things in the OptiScaler.ini file, if you really want high automation. Though this could easily be considered out of scope. Main one you'd need to edit in ini that you can't from the ui in game is the enable of fsr4 on rdna3 which also requires mesa git built from source at least till the august release of 25.2
+
+I also have a repo to pull and hook to mesa-git if you're interested in automating that too do lmk!
+
+Vysp3r
+Vysp3r commented on Jul 7
+Vysp3r
+on Jul 7
+Owner
+Author
+I will just wait for that mesa version to release and add that then.
+
+I'll open another issue for that to keep it in mind.
+
+So if I understand properly here's what I need to do:
+
+Download your bundle
+Extract in where the game exec is located
+Rename OptiScaler.dll to one of the 8 possible choices (see image 1)
+Image 1:
+Image
+
+xXJSONDeruloXx
+xXJSONDeruloXx commented on Jul 7
+xXJSONDeruloXx
+on Jul 7 · edited by xXJSONDeruloXx
+yes thats the gist! heres what the BUNDLED_ version currently looks like for context
+
+➜  BUNDLED_OptiScaler_v0.7.7-pre12_20250702 tree
+.
+├── amd_fidelityfx_dx12.dll      # might replace a game included dll, in which case rename game's with .dll.b to backup 
+├── amd_fidelityfx_vk.dll          # might replace a game included dll, in which case rename game's with .dll.b to backup
+├── amdxcffx64.dll                    # this is FSR 4 DLL (I believe 4.0.1, though 4.0.0 performs way better on RDNA3, cant find where to build from source though ): 
+├── D3D12_Optiscaler
+│   └── D3D12Core.dll
+├── dlssg_to_fsr3_amd_is_better.dll   # DLSSG-To-FSR3 aka Nukems mod. Lets AMD turn DLSS menu options into AMD equivalents
+├── DlssOverrides
+│   ├── DisableSignatureOverride.reg
+│   └── EnableSignatureOverride.reg
+├── fakenvapi.ini                                         # config for fakenvapi, which exposes the diss options on AMD, for nukems mod mainly
+├── libxess_dx11.dll
+├── libxess.dll
+├── Licenses
+│   ├── DirectX_LICENSE.txt
+│   ├── FidelityFX_LICENSE.md
+│   └── XeSS_LICENSE.txt
+├── nvapi64.dll                               # the dll for fakenvapi, to expose diss options in game so nukems can turn to amd equivalents
+├── nvngx.dll                              # already renamed Nvidia dll extracted from their official sdk, needed for fakenvapi and nukems
+├── OptiScaler.dll                   # this is what you will rename one of those other filetypes
+├── OptiScaler.ini
+├── setup_linux.sh
+└── setup_windows.bat
+
+4 directories, 19 files
+➜  BUNDLED_OptiScaler_v0.7.7-pre12_20250702 
+
+
+
 
 ## Decisions Summary (Resolved from Open Questions)
 Default Source: Bleeding-edge bundled release (latest).
-State Handling (Initial): Simplest possible — rely on on-disk detection; lightweight JSON state may be added later only if needed.
-Launch Options Modification: Inject WINEDLLOVERRIDES snippet immediately to the left of %command% if present; if no %command% append at end. Merge with existing WINEDLLOVERRIDES variable without duplication.
+State Handling: JSON persistence file (hash, injection dll, backup flag, original launch options, override applied) under XDG data dir now active.
+Launch Options Modification: Inject WINEDLLOVERRIDES immediately left of %command% if present; else append; idempotent merge (implemented).
 Scope (Initial UI): Steam games only; other launchers deferred.
-Testing Approach: Test-driven where practical; start with focused unit-level tests (string launch options manipulation) before broader install logic.
+Testing Approach: Start with pure-string utilities (override merge) then add tests for ini spoof + backup/restore (pending).
 
 ## Checklist (Scope Definition)
 - Identify feature surface (per-game vs global) and UX entry points
@@ -24,43 +157,51 @@ Testing Approach: Test-driven where practical; start with focused unit-level tes
 - Edge cases & safeguards
 - Testing strategy (unit-ish components + manual QA steps)
 
-## Progress Update (Aug 25 2025)
+## Progress Update (Aug 25 2025 – refreshed after Phase 1b commit)
 Legend: [x] done, [~] partial/in progress, [ ] pending.
 
 Core Foundations:
 - [x] Decisions captured (bleeding-edge default, Steam-only scope for Phase 1, simple on-disk detection, launch override merge rules, TDD for pure logic).
 - [x] `OptiScalerManager` implemented with detection heuristic.
 - [x] Launch options merge utility (`Utils.LaunchOptions.ensure_override`) + unit test (idempotent merge verified).
-- [x] Minimal install workflow: GitHub latest bleeding-edge release fetch → asset URL scrape → download → extract via existing filesystem helper → deploy core files (`OptiScaler.dll` renamed to injection target + `OptiScaler.ini`).
+- [x] Minimal install workflow: GitHub latest bleeding-edge release fetch → JSON asset parse → download → extract via existing filesystem helper → deploy core files (`OptiScaler.dll` renamed to injection target + `OptiScaler.ini`).
 - [x] Backup & restore logic for existing injection target (renames to `.b` and restores on removal) with heuristic to skip if already OptiScaler.
 - [x] Removal workflow: delete injection + ini, restore backup if present.
-- [x] Minimal UI dialog (`OptiScalerDialog`) with install/remove actions, spinner, simple status; integrated via `ExtraButton` popover (Steam games only).
+- [x] UI dialog (`OptiScalerDialog`) now with install/remove, injection filename dropdown, spoof toggle, preserve INI toggle, launch override toggle, error label.
 - [x] Menu item integration & diagnostic verification (temporary debug output since removed).
-- [ ] Launch options auto-apply integration (utility exists; not yet invoked by install flow).
-- [ ] State persistence (planned JSON) – not started.
-- [ ] Advanced detection (hash/version extraction, Unreal exe scan, conflict detection) – not started.
-- [ ] INI spoof toggle application – not started (placeholder in `InstallOptions`).
-- [ ] Alternate injection filename selection UI – not yet surfaced (manager supports only default name path variable).
-- [ ] Support file deployment beyond core dll + ini (libs, directories) – deferred.
+- [x] Launch options auto-apply integration (applies and records original for rollback; reverts on removal).
+- [x] State persistence (JSON file with per‑game entry).
+- [x] INI spoof toggle application (Dxgi=false when disabled).
+- [x] Alternate injection filename selection UI (dropdown).
+- [~] Hash capture (dll SHA256 stored) – version still null; no conflict hash comparison yet.
+- [ ] Advanced detection (version extraction, Unreal exe scan, conflict detection) – pending.
+- [ ] Support file deployment beyond core dll + ini (supporting libs & directories) – deferred.
 
 Technical Debt / TODOs:
-- Replace ad-hoc release JSON string scrape with proper JSON-GLib parsing & asset selection (handles multiple assets, errors robustly).
-- Persist backup metadata / install state (so detection can distinguish foreign mods vs ours without relying solely on `.ini`).
-- Improve error reporting (currently logs only; dialog surfaces generic failure toast).
-- Strengthen extraction/deployment validation (hashes, size checks).
-- Provide unit tests for backup/restore logic and removal idempotence.
+- Version extraction (use release tag) & store in state.
+- Add Unreal exe path detection + store exe_dir (currently just installdir).
+- Conflict detection: compare existing injection dll hash vs stored.
+- Support libs deployment (libxess, nvapi64, etc.) + selective cleanup on removal.
+- Improve error reporting (structured codes surfaced in dialog, not only toast).
+- Deployment validation (expected file sizes / existence checks for optional libs).
+- Unit tests: backup/restore, removal idempotence, ini spoof edit, state round‑trip.
+- Reduce warnings (unreachable catch clauses, const discard) in new code.
+- Consider making override cleanup smarter (remove only our pair from WINEDLLOVERRIDES if safe).
 
 Risk Notes (Updated):
-- Overwrite risk mitigated by backup rename, but lack of hash/version means potential misclassification of existing mod remains.
-- Network/API failure still only produces generic toast; user lacks actionable message.
-- String-based release parsing brittle to upstream format changes.
+- Potential misclassification still until version/conflict detection added.
+- Limited user feedback on specific failure cause (only one-line error label).
+- Lack of supporting libs deployment may reduce effectiveness for some games.
+- Override rollback logic assumes original_launch_options hasn't changed externally.
 
-Next Immediate Steps (Phase 1b):
-1. Invoke launch options override (optional checkbox to be added in dialog) using existing merge utility. [ ]
-2. Add INI spoof toggle editing (simple search/replace `Dxgi=auto` vs `Dxgi=false`). [ ]
-3. Introduce basic state persistence (JSON) storing injection name + simple version string (release tag) + backup created flag. [ ]
-4. Upgrade release parsing to JSON-GLib with error handling + asset selection fallback. [ ]
-5. Add alternate injection filename selector in dialog (dropdown). [ ]
+Next Immediate Steps (Phase 1c):
+1. Executable path heuristics (Unreal, launcher rewrites) + persist exe_dir. [ ]
+2. Version/tag extraction from release JSON stored in state (update existing entries). [ ]
+3. Support file deployment & restoration (libs + dll list) with cautious pattern-based removal. [ ]
+4. Conflict / foreign mod detection using stored hash vs current; surface warning + force install option. [ ]
+5. Unit tests for ini spoof, backup/restore, override rollback. [ ]
+6. Error reporting improvements (structured last_error codes + UI detail). [ ]
+7. Warning cleanup (remove unreachable catches, adjust property mutability). [ ]
 
 Planned Later (Phase 2+):
 - Expand detection heuristics (Unreal exe scan) + per-game exe selection.
@@ -73,9 +214,10 @@ Quality Gates Status (Current):
 - Tests: Launch options test passing; no new tests yet for install/remove.
 
 Open Items (Active):
-- Decide user-facing messaging for backup creation (inform after first overwrite?).
-- Determine minimal state JSON path & schema (likely under `~/.local/share/ProtonPlus/optiscaler/state.json`).
-- Evaluate whether to gate install when game appears running (optional pre-check).
+- User-facing messaging for backup creation (toast vs inline note) – pending.
+- Game running detection pre-check (optional) – evaluate.
+- Force install UX for conflicts – design.
+- Override cleanup strategy upon removal when user changed launch options since install.
 
 This section will be updated after launch options integration and state persistence are implemented.
 
@@ -250,8 +392,8 @@ Automated (lightweight):
 
 ## 14. Incremental Delivery Plan
 Phase 1: Core backend (manager + download + extraction + deploy) + minimal dialog with install/remove.
-Phase 2: Launch options automation + INI spoof toggle.
-Phase 3: Advanced detection heuristics (Unreal exe scanning) + status icon + update flow.
+Phase 2 (completed): Launch options automation + INI spoof toggle + state & UI enhancements.
+Phase 3 (in progress planning): Advanced detection heuristics (Unreal exe scanning) + status icon + update flow + support libs.
 Phase 4 (optional): Non-Steam launchers & FSR4 Mesa capability check.
 
 ## 15. Potential Risks & Mitigations
