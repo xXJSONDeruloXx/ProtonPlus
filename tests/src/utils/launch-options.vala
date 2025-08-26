@@ -1,4 +1,5 @@
-// Test copy of LaunchOptions util (mirrors production for unit tests)
+// Duplicate of production Utils.LaunchOptions.ensure_override for isolated unit testing.
+// TODO: Replace with direct import once test build path issue resolved.
 namespace Utils {
     public class LaunchOptionsTestCopy {
         public static string ensure_override(string current, string injection_basename) {
