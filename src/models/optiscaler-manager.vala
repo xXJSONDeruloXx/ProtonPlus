@@ -36,6 +36,8 @@ namespace ProtonPlus.Models {
             public bool installed { get; set; }
             public string? injection_file { get; set; }
             public string? version { get; set; }
+            public bool conflict { get; set; } // true if OptiScaler.ini present but hash mismatch vs stored
+            public string? exe_dir { get; set; }
         }
 
         // Persistent state entry (saved to JSON)
@@ -47,6 +49,11 @@ namespace ProtonPlus.Models {
             public string? original_launch_options { get; set; }
             public bool applied_override { get; set; }
             public string? exe_dir { get; set; }
+            public Gee.ArrayList<string> installed_files { get; set; }
+
+            public StateEntry () {
+                installed_files = new Gee.ArrayList<string>();
+            }
         }
 
         private Gee.HashMap<string,StateEntry> saved_state = new Gee.HashMap<string,StateEntry>();
@@ -64,31 +71,40 @@ namespace ProtonPlus.Models {
             var state = new State();
             ProtonPlus.Models.Games.Steam? steam_game = game as ProtonPlus.Models.Games.Steam;
             if (steam_game == null) {
-                state.installed = false;
-                return state;
+                state.installed = false; return state;
             }
-            string install_dir = steam_game.installdir;
-            if (install_dir == "") {
-                state.installed = false;
-                return state;
-            }
-            // Check for known injection dlls in install dir root (initial heuristic only)
+            string base_dir = steam_game.installdir;
+            if (base_dir == "") { state.installed = false; return state; }
+            // If we have a saved exe_dir use it first
+            var entry = saved_state.get("steam:" + steam_game.appid.to_string());
+            Gee.List<string> dirs = new Gee.ArrayList<string>();
+            if (entry != null && entry.exe_dir != null && entry.exe_dir.length > 0) dirs.add(entry.exe_dir);
+            dirs.add(base_dir);
             string[] names = {"dxgi.dll", "winmm.dll", "d3d12.dll", "dbghelp.dll", "version.dll", "wininet.dll", "winhttp.dll"};
-            foreach (var name in names) {
-                var path = Path.build_filename(install_dir, name);
-                if (FileUtils.test(path, FileTest.IS_REGULAR)) {
-                    // Minimal heuristic: presence of OptiScaler.ini alongside dll suggests install
-                    var ini = Path.build_filename(install_dir, "OptiScaler.ini");
-                    if (FileUtils.test(ini, FileTest.IS_REGULAR)) {
-                        state.installed = true;
-                        state.injection_file = name;
-                        // Placeholder: version extraction could parse ini later
-                        state.version = null;
-                        return state;
+            foreach (var dir in dirs) {
+                foreach (var name in names) {
+                    var path = Path.build_filename(dir, name);
+                    if (FileUtils.test(path, FileTest.IS_REGULAR)) {
+                        var ini = Path.build_filename(dir, "OptiScaler.ini");
+                        if (FileUtils.test(ini, FileTest.IS_REGULAR)) {
+                            state.installed = true;
+                            state.injection_file = name;
+                            state.exe_dir = dir;
+                            // Conflict check: compute hash & compare if stored
+                            string? current_hash = compute_sha256(path);
+                            if (entry != null && entry.hash != null && current_hash != null && entry.hash != current_hash) {
+                                state.conflict = true;
+                                state.version = entry.version; // keep stored version but flag conflict
+                            } else {
+                                if (entry != null) state.version = entry.version;
+                            }
+                            return state;
+                        }
                     }
                 }
             }
             state.installed = false;
+            if (entry != null) state.exe_dir = entry.exe_dir; // preserve known exe_dir even if files missing
             return state;
         }
 
@@ -106,7 +122,7 @@ namespace ProtonPlus.Models {
             return dir;
         }
 
-        private string? find_bundle_asset_url(string json) {
+    private string? find_bundle_asset_url(string json) {
             try {
                 var parser = new Json.Parser();
                 parser.load_from_data(json, -1);
@@ -114,6 +130,8 @@ namespace ProtonPlus.Models {
                 if (root == null) return null;
                 var obj = root.get_object();
                 if (obj == null) return null;
+        // capture release tag for later version recording
+        if (obj.has_member("tag_name")) current_release_tag = obj.get_string_member("tag_name");
                 if (!obj.has_member("assets")) return null;
                 var assets = obj.get_array_member("assets");
                 if (assets == null) return null;
@@ -132,7 +150,7 @@ namespace ProtonPlus.Models {
             return null;
         }
 
-        private async string? download_bundle(string url) {
+    private async string? download_bundle(string url) {
             string cache = get_cache_dir();
             // Derive filename from url tail
             string fname = "bundle.7z";
@@ -187,60 +205,110 @@ namespace ProtonPlus.Models {
             return true;
         }
 
-        private bool deploy_minimal(string extracted_root, string game_dir, string injection_name, bool preserve_ini, bool disable_spoofing, out string? deployed_hash) {
-            // Minimal deployment: Look for OptiScaler.dll and OptiScaler.ini; copy into game_dir as <injection_name>.dll + OptiScaler.ini
-            // TODO: Support advanced file set + spoof toggle edits + hash/version recording.
-            string dll_source = Path.build_filename(extracted_root, "OptiScaler.dll");
-            string ini_source = Path.build_filename(extracted_root, "OptiScaler.ini");
-            if (!FileUtils.test(dll_source, FileTest.IS_REGULAR) || !FileUtils.test(ini_source, FileTest.IS_REGULAR)) {
+        private bool deploy_full(string extracted_root, string game_dir, string injection_name, bool preserve_ini, bool disable_spoofing, out string? deployed_hash, out Gee.ArrayList<string> installed_files) {
+            installed_files = new Gee.ArrayList<string>();
+            // Locate core files (may be inside a nested directory or use different casing)
+            string core_dir;
+            string dll_name;
+            string ini_name;
+            if (!find_core_dir(extracted_root, out core_dir, out dll_name, out ini_name)) {
                 message("OptiScaler bundle missing core files");
-                deployed_hash = null;
-                return false;
+                deployed_hash = null; return false;
             }
+            string dll_source = Path.build_filename(core_dir, dll_name);
+            string ini_source = Path.build_filename(core_dir, ini_name);
             string injection_filename = injection_name + ".dll";
             if (!ensure_backup_if_needed(game_dir, injection_filename)) {
-                message("OptiScaler deploy aborted: could not backup existing %s".printf(injection_filename));
-                deployed_hash = null;
-                return false;
+                message("OptiScaler deploy aborted: backup failed for %s".printf(injection_filename));
+                deployed_hash = null; return false;
             }
+            // Core copy
             string dll_target = Path.build_filename(game_dir, injection_filename);
             string ini_target = Path.build_filename(game_dir, "OptiScaler.ini");
             try {
-                File dll_src = File.new_for_path(dll_source);
-                File dll_dst = File.new_for_path(dll_target);
-                if (dll_dst.query_exists()) dll_dst.delete(); // safe after backup
-                dll_src.copy(dll_dst, FileCopyFlags.OVERWRITE);
+                copy_file_overwrite(dll_source, dll_target); installed_files.add(injection_filename);
                 if (!preserve_ini || !FileUtils.test(ini_target, FileTest.IS_REGULAR)) {
-                    File ini_src = File.new_for_path(ini_source);
-                    File ini_dst = File.new_for_path(ini_target);
-                    if (ini_dst.query_exists()) ini_dst.delete();
-                    ini_src.copy(ini_dst, FileCopyFlags.OVERWRITE);
+                    copy_file_overwrite(ini_source, ini_target);
+                }
+                installed_files.add("OptiScaler.ini");
+                // Supporting libraries & directories
+                string[] support_files = {"amd_fidelityfx_dx12.dll","amd_fidelityfx_vk.dll","nvapi64.dll","nvngx.dll","amdxcffx64.dll","libxess.dll","libxess_dx11.dll","dlssg_to_fsr3_amd_is_better.dll","fakenvapi.ini"};
+                foreach (var name in support_files) {
+                    string src = Path.build_filename(extracted_root, name);
+                    if (FileUtils.test(src, FileTest.IS_REGULAR)) {
+                        string dst = Path.build_filename(game_dir, name);
+                        copy_file_overwrite(src, dst);
+                        installed_files.add(name);
+                    }
+                }
+                string[] support_dirs = {"D3D12_Optiscaler","DlssOverrides"};
+                foreach (var dname in support_dirs) {
+                    string src_dir = Path.build_filename(extracted_root, dname);
+                    if (FileUtils.test(src_dir, FileTest.IS_DIR)) {
+                        string dst_dir = Path.build_filename(game_dir, dname);
+                        copy_directory_recursive(src_dir, dst_dir, installed_files, game_dir);
+                    }
                 }
                 if (disable_spoofing) {
                     apply_ini_spoof_toggle(ini_target, true);
                 }
             } catch (Error e) {
                 message(e.message);
-                deployed_hash = null;
-                return false;
+                deployed_hash = null; return false;
             }
-            // compute hash
             deployed_hash = compute_sha256(dll_target);
             return true;
         }
 
+        private void copy_file_overwrite(string src_path, string dst_path) throws Error {
+            File src = File.new_for_path(src_path);
+            File dst = File.new_for_path(dst_path);
+            if (dst.query_exists()) dst.delete();
+            src.copy(dst, FileCopyFlags.OVERWRITE);
+        }
+
+        private void copy_directory_recursive(string src_dir, string dst_dir, Gee.ArrayList<string> installed_files, string game_dir) throws Error {
+            if (!FileUtils.test(dst_dir, FileTest.IS_DIR)) {
+                DirUtils.create_with_parents(dst_dir, 0755);
+            }
+            Dir d = Dir.open(src_dir);
+            string? name;
+            while ((name = d.read_name()) != null) {
+                string src_path = Path.build_filename(src_dir, name);
+                string dst_path = Path.build_filename(dst_dir, name);
+                if (FileUtils.test(src_path, FileTest.IS_DIR)) {
+                    copy_directory_recursive(src_path, dst_path, installed_files, game_dir);
+                } else if (FileUtils.test(src_path, FileTest.IS_REGULAR)) {
+                    copy_file_overwrite(src_path, dst_path);
+                    // Record relative path under game_dir
+                    if (dst_path.has_prefix(game_dir)) {
+                        string rel = dst_path.substring(game_dir.length + (game_dir.has_suffix(Path.DIR_SEPARATOR_S) ? 0 : 1));
+                        installed_files.add(rel);
+                    }
+                }
+            }
+            // Also record the top-level directory name itself (for removal convenience)
+            if (dst_dir.has_prefix(game_dir)) {
+                string rel_dir = dst_dir.substring(game_dir.length + (game_dir.has_suffix(Path.DIR_SEPARATOR_S) ? 0 : 1));
+                if (!installed_files.contains(rel_dir)) installed_files.add(rel_dir);
+            }
+        }
+
         // Phase 1 minimal install: download bleeding-edge bundle & deploy core files. Returns true on success.
+        private string? current_release_tag = null; // updated during find_bundle_asset_url
         public async bool install(Game game, InstallOptions opts) throws Error {
             ProtonPlus.Models.Games.Steam? steam_game = game as ProtonPlus.Models.Games.Steam;
             if (steam_game == null) {
                 message("OptiScaler install: non-Steam game unsupported in Phase 1");
                 return false;
             }
-            string game_dir = steam_game.installdir;
-            if (game_dir == "") {
+            string base_dir = steam_game.installdir;
+            if (base_dir == "") {
                 message("OptiScaler install: empty game directory");
                 return false;
             }
+            // Determine executable dir (may differ for Unreal Shipping.exe)
+            string game_dir = find_exe_dir(base_dir);
             // 1. Fetch latest bleeding-edge release JSON
             string? json = yield ProtonPlus.Utils.Web.GET(BLEEDING_EDGE_REPO_API);
             if (json == null) { message("Failed to fetch release info"); return false; }
@@ -253,11 +321,15 @@ namespace ProtonPlus.Models {
             // 4. Extract bundle
             string? extracted_root = yield extract_bundle(archive_path);
             if (extracted_root == null || extracted_root == "") { message("Extraction failed"); return false; }
-            // 5. Deploy minimal set (injection name currently only dxgi by default)
-            string? dll_hash;
-            if (!deploy_minimal(extracted_root, game_dir, opts.injection_name, opts.preserve_ini, opts.disable_spoofing, out dll_hash)) {
-                message("Deploy failed");
-                return false;
+            // 5. Determine actual root directory (libarchive wrapper returns first entry path which might be a file)
+            string extracted_root_dir = extracted_root;
+            if (!FileUtils.test(extracted_root_dir, FileTest.IS_DIR)) {
+                extracted_root_dir = Path.get_dirname(extracted_root_dir);
+            }
+            message("OptiScaler: extracted root %s (normalized dir %s)".printf(extracted_root, extracted_root_dir));
+            string? dll_hash; Gee.ArrayList<string> installed_files;
+            if (!deploy_full(extracted_root_dir, game_dir, opts.injection_name, opts.preserve_ini, opts.disable_spoofing, out dll_hash, out installed_files)) {
+                message("Deploy failed"); return false;
             }
             // Launch options override
             string? original_launch_options = null;
@@ -279,12 +351,26 @@ namespace ProtonPlus.Models {
             // Persist state
             var entry = new StateEntry();
             entry.injection = opts.injection_name + ".dll";
-            entry.version = null; // placeholder until version extraction
+            // Version: prefer tag; else attempt derive from bundle filename
+            string? version = current_release_tag;
+            if (version != null && version.has_prefix("v")) version = version.substring(1); // strip leading v
+            if (version == null && asset_url != null) {
+                // crude parse: look for _v and next '_' or '.' sequence
+                int vpos = asset_url.index_of("_v");
+                if (vpos >= 0) {
+                    int start = vpos + 2;
+                    int end = start;
+                    while (end < asset_url.length && (asset_url[end].isalnum() || asset_url[end] == '.' || asset_url[end] == '-' )) end++;
+                    version = asset_url.substring(start, end);
+                }
+            }
+            entry.version = version;
             entry.hash = dll_hash;
             entry.backup_created = last_backup_created;
             entry.original_launch_options = original_launch_options;
             entry.applied_override = applied_override;
-            entry.exe_dir = game_dir; // currently same as installdir; future exe scan may differ
+            entry.exe_dir = game_dir;
+            foreach (var f in installed_files) entry.installed_files.add(f);
             saved_state.set("steam:" + steam_game.appid.to_string(), entry);
             save_state();
             return true;
@@ -296,11 +382,14 @@ namespace ProtonPlus.Models {
                 message("OptiScaler remove: non-Steam game unsupported in Phase 1");
                 return false;
             }
-            string game_dir = steam_game.installdir;
-            if (game_dir == "") {
+            string base_dir = steam_game.installdir;
+            if (base_dir == "") {
                 message("OptiScaler remove: empty game directory");
                 return false;
             }
+            var key = "steam:" + steam_game.appid.to_string();
+            StateEntry? stored = saved_state.get(key);
+            string game_dir = (stored != null && stored.exe_dir != null && stored.exe_dir.length > 0) ? stored.exe_dir : base_dir;
             var state = detect(game);
             if (!state.installed || state.injection_file == null) {
                 // Nothing to remove; treat as success (idempotent)
@@ -311,6 +400,18 @@ namespace ProtonPlus.Models {
             string backup_path = injection_path + ".b";
             bool ok = true;
             try {
+                // Remove any supporting files recorded in state
+                if (stored != null) {
+                    foreach (var rel in stored.installed_files) {
+                        string full = Path.build_filename(game_dir, rel);
+                        if (FileUtils.test(full, FileTest.IS_REGULAR)) {
+                            ProtonPlus.Utils.Filesystem.delete_file(full);
+                        } else if (FileUtils.test(full, FileTest.IS_DIR)) {
+                            // Synchronous best-effort recursive delete using internal helper below
+                            delete_dir_recursive(full);
+                        }
+                    }
+                }
                 if (FileUtils.test(injection_path, FileTest.IS_REGULAR)) {
                     if (!ProtonPlus.Utils.Filesystem.delete_file(injection_path)) {
                         message("OptiScaler remove: failed to delete injection file");
@@ -335,8 +436,7 @@ namespace ProtonPlus.Models {
                 ok = false;
             }
             // Launch options cleanup (conservative): only if we recorded we applied and can safely revert to original
-            var key = "steam:" + steam_game.appid.to_string();
-            StateEntry? entry = saved_state.get(key);
+            StateEntry? entry = stored;
             if (entry != null && entry.applied_override && entry.original_launch_options != null) {
                 var steam_launcher = steam_game.launcher as ProtonPlus.Models.Launchers.Steam;
                 if (steam_launcher != null) {
@@ -385,6 +485,12 @@ namespace ProtonPlus.Models {
                     if (entry_obj.has_member("original_launch_options")) e.original_launch_options = entry_obj.get_string_member("original_launch_options");
                     if (entry_obj.has_member("applied_override")) e.applied_override = entry_obj.get_boolean_member("applied_override");
                     if (entry_obj.has_member("exe_dir")) e.exe_dir = entry_obj.get_string_member("exe_dir");
+                    if (entry_obj.has_member("installed_files")) {
+                        var arr = entry_obj.get_array_member("installed_files");
+                        for (uint i = 0; i < arr.get_length(); i++) {
+                            e.installed_files.add(arr.get_string_element(i));
+                        }
+                    }
                     saved_state.set(key, e);
                 }
             } catch (Error e) { message("OptiScaler state load failed: %s".printf(e.message)); }
@@ -405,6 +511,11 @@ namespace ProtonPlus.Models {
                     if (e.original_launch_options != null) { builder.set_member_name("original_launch_options"); builder.add_string_value(e.original_launch_options); }
                     builder.set_member_name("applied_override"); builder.add_boolean_value(e.applied_override);
                     if (e.exe_dir != null) { builder.set_member_name("exe_dir"); builder.add_string_value(e.exe_dir); }
+                    // installed_files array
+                    builder.set_member_name("installed_files");
+                    builder.begin_array();
+                    foreach (var f in e.installed_files) builder.add_string_value(f);
+                    builder.end_array();
                     builder.end_object();
                 }
                 builder.end_object();
@@ -452,6 +563,98 @@ namespace ProtonPlus.Models {
                 ProtonPlus.Utils.Filesystem.modify_file(ini_path, content);
                 return true;
             } catch (Error e) { message(e.message); return false; }
+        }
+
+        /* ==== Executable path heuristics (Unreal Shipping.exe detection) ==== */
+        private string find_exe_dir(string base_dir) {
+            // Search depth-limited for *Shipping.exe inside Binaries/Win64
+            try {
+                string? found = null;
+                recursive_scan(base_dir, 0, 4, (path) => {
+                    if (found != null) return; // early exit
+                    if (path.has_suffix("Shipping.exe") && path.index_of("Binaries" + Path.DIR_SEPARATOR_S + "Win64") >= 0) {
+                        found = Path.get_dirname(path);
+                    }
+                });
+                if (found != null) return found;
+            } catch (Error e) { message(e.message); }
+            return base_dir; // fallback
+        }
+
+        private delegate void FileMatch(string path);
+
+        private void recursive_scan(string dir, int depth, int max_depth, FileMatch cb) throws Error {
+            if (depth > max_depth) return;
+            Dir d = Dir.open(dir);
+            string? name;
+            while ((name = d.read_name()) != null) {
+                if (name == "." || name == "..") continue;
+                string path = Path.build_filename(dir, name);
+                if (FileUtils.test(path, FileTest.IS_DIR)) {
+                    recursive_scan(path, depth + 1, max_depth, cb);
+                } else if (FileUtils.test(path, FileTest.IS_REGULAR)) {
+                    cb(path);
+                }
+            }
+        }
+
+        // Discover directory containing OptiScaler core files, accommodating nested archive structures
+    private bool find_core_dir(string root, out string core_dir, out string dll_name, out string ini_name) {
+            core_dir = root; dll_name = "OptiScaler.dll"; ini_name = "OptiScaler.ini";
+            // Fast path
+            if (FileUtils.test(Path.build_filename(root, dll_name), FileTest.IS_REGULAR) && FileUtils.test(Path.build_filename(root, ini_name), FileTest.IS_REGULAR)) {
+                return true;
+            }
+            // Recursive limited search depth 3
+            bool found = false;
+            string found_dir = root; string found_dll = dll_name; string found_ini = ini_name;
+            try {
+                recursive_scan(root, 0, 3, (path) => {
+                    if (found) return;
+                    string basename_str = Path.get_basename(path);
+                    string lower = basename_str;
+                    // attempt lowercase conversion; ignore errors
+                    try { lower = basename_str.down(); } catch (Error e) {}
+                    if (lower == "optiscaler.dll") {
+                        string dir = Path.get_dirname(path);
+                        string ini_candidate = Path.build_filename(dir, "OptiScaler.ini");
+                        if (!FileUtils.test(ini_candidate, FileTest.IS_REGULAR)) {
+                            // try lowercase variant
+                            string ini_lower = Path.build_filename(dir, "optiscaler.ini");
+                            if (FileUtils.test(ini_lower, FileTest.IS_REGULAR)) ini_candidate = ini_lower;
+                        }
+                        if (FileUtils.test(ini_candidate, FileTest.IS_REGULAR)) {
+                            found = true;
+                            found_dir = dir;
+                            found_dll = basename_str; // preserve actual case
+                            found_ini = Path.get_basename(ini_candidate);
+                        }
+                    }
+                });
+            } catch (Error e) { message(e.message); }
+            if (found) {
+                core_dir = found_dir; dll_name = found_dll; ini_name = found_ini; return true;
+            }
+            return false;
+        }
+
+        // Minimal recursive directory delete (non-async) used only for cleanup of known installed files.
+        private void delete_dir_recursive(string dir) {
+            try {
+                Dir d = Dir.open(dir);
+                string? name;
+                while ((name = d.read_name()) != null) {
+                    if (name == "." || name == "..") continue;
+                    string path = Path.build_filename(dir, name);
+                    if (FileUtils.test(path, FileTest.IS_DIR)) {
+                        delete_dir_recursive(path);
+                        Posix.rmdir(path);
+                    } else {
+                        ProtonPlus.Utils.Filesystem.delete_file(path);
+                    }
+                }
+                Posix.rmdir(dir);
+            } catch (Error e) { message(e.message); }
         }
     }
 }

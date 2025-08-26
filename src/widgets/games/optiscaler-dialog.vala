@@ -2,7 +2,8 @@ namespace ProtonPlus.Widgets {
     // Minimal Phase 1 OptiScaler dialog: install/remove + state display.
     public class OptiScalerDialog : Adw.Dialog {
         private Models.Game game;
-        private Gtk.Label status_label;
+    private Gtk.Label status_label;
+    private Gtk.Label detail_label;
     private Gtk.Button install_button;
         private Gtk.Button remove_button;
         private Gtk.Button close_button;
@@ -25,6 +26,9 @@ namespace ProtonPlus.Widgets {
             status_label = new Gtk.Label("");
             status_label.set_wrap(true);
             status_label.set_xalign(0.0f);
+            detail_label = new Gtk.Label("");
+            detail_label.set_wrap(true);
+            detail_label.set_xalign(0.0f);
 
             spinner = new Gtk.Spinner();
             spinner.set_spinning(false);
@@ -47,6 +51,7 @@ namespace ProtonPlus.Widgets {
             root_box.set_margin_start(18);
             root_box.set_margin_end(18);
             root_box.append(status_label);
+            root_box.append(detail_label);
             root_box.append(spinner);
             // Build options group
             options_group = new Adw.PreferencesGroup();
@@ -90,11 +95,17 @@ namespace ProtonPlus.Widgets {
         private void update_state() {
             var state = Models.OptiScalerManager.instance.detect(game);
             if (state.installed) {
+                string ver = state.version != null ? state.version : _("unknown version");
                 status_label.set_label(_("Status: Installed") + (state.injection_file != null ? " (" + state.injection_file + ")" : ""));
+                var details = _("Version: ") + ver;
+                if (state.exe_dir != null && state.exe_dir.length > 0) details += "\n" + _("Exe Dir: ") + state.exe_dir;
+                if (state.conflict) details += "\n" + _("Warning: Hash mismatch (possible conflict)");
+                detail_label.set_label(details);
                 install_button.set_sensitive(false);
                 remove_button.set_sensitive(true);
             } else {
                 status_label.set_label(_("Status: Not Installed"));
+                detail_label.set_label("");
                 install_button.set_sensitive(true);
                 remove_button.set_sensitive(false);
             }
