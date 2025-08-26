@@ -205,5 +205,9 @@ namespace ProtonPlus.Widgets {
 
 			return true;
 		}
+
+		public void add_toast(Adw.Toast toast) {
+			toast_overlay.add_toast(toast);
+		}
 	}
 }

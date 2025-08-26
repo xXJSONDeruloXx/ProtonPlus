@@ -4,6 +4,7 @@ namespace ProtonPlus.Widgets {
 		Gtk.Button open_install_directory_button;
 		Gtk.Button open_prefix_directory_button;
 		Gtk.Button open_protontricks_button;
+		Gtk.Button optiscaler_button;
 		Gtk.Box content_box;
 		Gtk.Popover popover;
 
@@ -17,7 +18,12 @@ namespace ProtonPlus.Widgets {
 			open_protontricks_button = new Gtk.Button.with_label(_("Open in protontricks"));
 			open_protontricks_button.clicked.connect(open_protontricks_button_clicked);
 
-			content_box = new Gtk.Box(Gtk.Orientation.VERTICAL, 10);
+			// OptiScaler management dialog button (Steam games only; appended in constructor)
+			optiscaler_button = new Gtk.Button.with_label(_("OptiScaler…"));
+			optiscaler_button.set_visible(true);
+			optiscaler_button.clicked.connect(optiscaler_button_clicked);
+
+			content_box = new Gtk.Box(Gtk.Orientation.VERTICAL, 6);
 			content_box.append(open_install_directory_button);
 			content_box.append(open_prefix_directory_button);
 
@@ -37,14 +43,16 @@ namespace ProtonPlus.Widgets {
 			this.game = game;
 
 			if (game is Models.Games.Steam) {
-				if (Globals.PROTONTRICKS_EXEC != null)
-					content_box.append(open_protontricks_button);
-
 				var steam_game = game as Models.Games.Steam;
 				open_install_directory_button.set_sensitive(!steam_game.is_non_steam);
-				open_prefix_directory_button.set_sensitive (FileUtils.test(game.prefixdir, GLib.FileTest.IS_DIR));
-				open_protontricks_button.set_sensitive(!steam_game.is_non_steam);
-			}
+				open_prefix_directory_button.set_sensitive(FileUtils.test(game.prefixdir, GLib.FileTest.IS_DIR));
+				if (Globals.PROTONTRICKS_EXEC != null) {
+					content_box.append(open_protontricks_button);
+					open_protontricks_button.set_sensitive(!steam_game.is_non_steam);
+				}
+				// Append OptiScaler button last for Steam games
+				content_box.append(optiscaler_button);
+			} // Non-Steam games simply omit the OptiScaler button for now
 		}
 
 		public override void dispose() {
@@ -53,9 +61,7 @@ namespace ProtonPlus.Widgets {
 			base.dispose();
 		}
 
-		void extra_button_clicked() {
-			popover.popup();
-		}
+		void extra_button_clicked() { popover.popup(); }
 
 		void open_install_directory_button_clicked() {
 			Utils.System.open_uri("file://%s".printf(game.installdir));
@@ -74,6 +80,13 @@ namespace ProtonPlus.Widgets {
 
 			Utils.System.run_command.begin("%s %u --gui".printf(Globals.PROTONTRICKS_EXEC, steam_game.appid));
 
+			popover.popdown();
+		}
+
+		void optiscaler_button_clicked() {
+			if (!(game is Models.Games.Steam)) { popover.popdown(); return; }
+			var dialog = new OptiScalerDialog(game);
+			dialog.present(Application.window);
 			popover.popdown();
 		}
 	}

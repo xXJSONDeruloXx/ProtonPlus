@@ -41,6 +41,7 @@ sources = files(
   'widgets/games/default-tool-dialog.vala',
   'widgets/games/compatibility-tool-row.vala',
   'widgets/games/compatibility-tool-dropdown.vala',
+  'widgets/games/optiscaler-dialog.vala',
 
   'models/group.vala',
   'models/steam-profile.vala',

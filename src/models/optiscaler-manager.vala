@@ -36,6 +36,9 @@ namespace ProtonPlus.Models {
 
         private OptiScalerManager() {}
 
+    // Tracks whether the last install operation created a backup (ephemeral – TODO: persist in state file later)
+    private bool last_backup_created = false;
+
         // Detect whether OptiScaler appears installed for a given game (Steam only initially)
     public State detect(Game game) {
             var state = new State();
@@ -131,22 +134,51 @@ namespace ProtonPlus.Models {
             return result; // path to extracted top-level directory
         }
 
-        private bool deploy_minimal(string extracted_root, string game_dir) {
-            // Minimal deployment: Look for OptiScaler.dll and OptiScaler.ini; copy into game_dir as dxgi.dll + OptiScaler.ini
-            // TODO: Support alternate injection names + backup semantics.
+        private bool ensure_backup_if_needed(string game_dir, string injection_filename) {
+            string target = Path.build_filename(game_dir, injection_filename);
+            last_backup_created = false;
+            if (!FileUtils.test(target, FileTest.IS_REGULAR)) {
+                return true; // nothing to backup
+            }
+            // Heuristic: if OptiScaler.ini is present we assume it's already ours (update scenario) → skip backup
+            string ini = Path.build_filename(game_dir, "OptiScaler.ini");
+            if (FileUtils.test(ini, FileTest.IS_REGULAR)) {
+                return true; // treat as ours
+            }
+            string backup = target + ".b";
+            if (FileUtils.test(backup, FileTest.IS_REGULAR)) {
+                // Backup already exists – assume previously created.
+                return true;
+            }
+            // Attempt atomic rename to create backup.
+            if (FileUtils.rename(target, backup) != 0) {
+                message("OptiScaler: failed to create backup for %s".printf(target));
+                return false; // fail to avoid overwriting foreign mod silently
+            }
+            last_backup_created = true; // TODO: persist this info in future state JSON
+            return true;
+        }
+
+        private bool deploy_minimal(string extracted_root, string game_dir, string injection_name) {
+            // Minimal deployment: Look for OptiScaler.dll and OptiScaler.ini; copy into game_dir as <injection_name>.dll + OptiScaler.ini
+            // TODO: Support advanced file set + spoof toggle edits + hash/version recording.
             string dll_source = Path.build_filename(extracted_root, "OptiScaler.dll");
             string ini_source = Path.build_filename(extracted_root, "OptiScaler.ini");
             if (!FileUtils.test(dll_source, FileTest.IS_REGULAR) || !FileUtils.test(ini_source, FileTest.IS_REGULAR)) {
                 message("OptiScaler bundle missing core files");
                 return false;
             }
-            string dll_target = Path.build_filename(game_dir, "dxgi.dll");
+            string injection_filename = injection_name + ".dll";
+            if (!ensure_backup_if_needed(game_dir, injection_filename)) {
+                message("OptiScaler deploy aborted: could not backup existing %s".printf(injection_filename));
+                return false;
+            }
+            string dll_target = Path.build_filename(game_dir, injection_filename);
             string ini_target = Path.build_filename(game_dir, "OptiScaler.ini");
             try {
-                // Overwrite for now (no backup) – will add backup later.
                 File dll_src = File.new_for_path(dll_source);
                 File dll_dst = File.new_for_path(dll_target);
-                if (dll_dst.query_exists()) dll_dst.delete();
+                if (dll_dst.query_exists()) dll_dst.delete(); // safe after backup
                 dll_src.copy(dll_dst, FileCopyFlags.OVERWRITE);
 
                 File ini_src = File.new_for_path(ini_source);
@@ -157,6 +189,7 @@ namespace ProtonPlus.Models {
                 message(e.message);
                 return false;
             }
+            // TODO: compute and store hash/version for future detection/persistence.
             return true;
         }
 
@@ -184,8 +217,8 @@ namespace ProtonPlus.Models {
             // 4. Extract bundle
             string? extracted_root = yield extract_bundle(archive_path);
             if (extracted_root == null || extracted_root == "") { message("Extraction failed"); return false; }
-            // 5. Deploy minimal set
-            if (!deploy_minimal(extracted_root, game_dir)) {
+            // 5. Deploy minimal set (injection name currently only dxgi by default)
+            if (!deploy_minimal(extracted_root, game_dir, opts.injection_name)) {
                 message("Deploy failed");
                 return false;
             }
@@ -196,8 +229,51 @@ namespace ProtonPlus.Models {
         }
 
         public async bool remove(Game game) throws Error {
-            // TODO: implement removal logic (restore backups, remove installed files, clean state)
-            return false;
+            ProtonPlus.Models.Games.Steam? steam_game = game as ProtonPlus.Models.Games.Steam;
+            if (steam_game == null) {
+                message("OptiScaler remove: non-Steam game unsupported in Phase 1");
+                return false;
+            }
+            string game_dir = steam_game.installdir;
+            if (game_dir == "") {
+                message("OptiScaler remove: empty game directory");
+                return false;
+            }
+            var state = detect(game);
+            if (!state.installed || state.injection_file == null) {
+                // Nothing to remove; treat as success (idempotent)
+                return true;
+            }
+            string injection_path = Path.build_filename(game_dir, state.injection_file);
+            string ini_path = Path.build_filename(game_dir, "OptiScaler.ini");
+            string backup_path = injection_path + ".b";
+            bool ok = true;
+            try {
+                if (FileUtils.test(injection_path, FileTest.IS_REGULAR)) {
+                    if (!ProtonPlus.Utils.Filesystem.delete_file(injection_path)) {
+                        message("OptiScaler remove: failed to delete injection file");
+                        ok = false;
+                    }
+                }
+                if (FileUtils.test(ini_path, FileTest.IS_REGULAR)) {
+                    if (!ProtonPlus.Utils.Filesystem.delete_file(ini_path)) {
+                        message("OptiScaler remove: failed to delete ini file");
+                        ok = false;
+                    }
+                }
+                // Restore backup if present and original now gone
+                if (FileUtils.test(backup_path, FileTest.IS_REGULAR) && !FileUtils.test(injection_path, FileTest.IS_REGULAR)) {
+                    if (FileUtils.rename(backup_path, injection_path) != 0) {
+                        message("OptiScaler remove: failed to restore backup");
+                        ok = false;
+                    }
+                }
+            } catch (Error e) {
+                message(e.message);
+                ok = false;
+            }
+            // TODO: Remove state persistence entry when implemented.
+            return ok;
         }
     }
 }

@@ -25,49 +25,59 @@ Testing Approach: Test-driven where practical; start with focused unit-level tes
 - Testing strategy (unit-ish components + manual QA steps)
 
 ## Progress Update (Aug 25 2025)
-Legend: [x] done, [~] in progress (partial), [ ] pending.
+Legend: [x] done, [~] partial/in progress, [ ] pending.
 
 Core Foundations:
-- [x] Decisions captured (bleeding-edge default, Steam-only initial scope, simple state, launch override rules, TDD focus for pure logic).
-- [x] `OptiScalerManager` skeleton with detection heuristic (`OptiScaler.ini` + injection dll presence).
-- [x] Launch options merge utility (`Utils.LaunchOptions.ensure_override`) + unit test (idempotence & merge cases).
-- [ ] Install workflow (download → extract → deploy) – starting now (Phase 1 backend).
-- [ ] Removal workflow.
-- [ ] Launch options auto-apply integration (currently only pure function, not invoked in runtime).
-- [ ] State persistence (JSON) – deferred until after basic install/remove.
-- [ ] UI dialog / menu item integration.
-- [ ] Advanced detection (hash/version, Unreal exe scan, conflict detection).
-- [ ] INI spoof toggle application (currently not written; placeholder flag only).
+- [x] Decisions captured (bleeding-edge default, Steam-only scope for Phase 1, simple on-disk detection, launch override merge rules, TDD for pure logic).
+- [x] `OptiScalerManager` implemented with detection heuristic.
+- [x] Launch options merge utility (`Utils.LaunchOptions.ensure_override`) + unit test (idempotent merge verified).
+- [x] Minimal install workflow: GitHub latest bleeding-edge release fetch → asset URL scrape → download → extract via existing filesystem helper → deploy core files (`OptiScaler.dll` renamed to injection target + `OptiScaler.ini`).
+- [x] Backup & restore logic for existing injection target (renames to `.b` and restores on removal) with heuristic to skip if already OptiScaler.
+- [x] Removal workflow: delete injection + ini, restore backup if present.
+- [x] Minimal UI dialog (`OptiScalerDialog`) with install/remove actions, spinner, simple status; integrated via `ExtraButton` popover (Steam games only).
+- [x] Menu item integration & diagnostic verification (temporary debug output since removed).
+- [ ] Launch options auto-apply integration (utility exists; not yet invoked by install flow).
+- [ ] State persistence (planned JSON) – not started.
+- [ ] Advanced detection (hash/version extraction, Unreal exe scan, conflict detection) – not started.
+- [ ] INI spoof toggle application – not started (placeholder in `InstallOptions`).
+- [ ] Alternate injection filename selection UI – not yet surfaced (manager supports only default name path variable).
+- [ ] Support file deployment beyond core dll + ini (libs, directories) – deferred.
 
 Technical Debt / TODOs:
-- Duplicate launch options util in tests (to be unified once install path stabilizes to avoid churn in test harness paths).
-- Install currently supports only default injection name (will expand after baseline deployment validated).
-- Archive extraction helper will be internal to manager initially; may refactor into generic util later if reused.
+- Replace ad-hoc release JSON string scrape with proper JSON-GLib parsing & asset selection (handles multiple assets, errors robustly).
+- Persist backup metadata / install state (so detection can distinguish foreign mods vs ours without relying solely on `.ini`).
+- Improve error reporting (currently logs only; dialog surfaces generic failure toast).
+- Strengthen extraction/deployment validation (hashes, size checks).
+- Provide unit tests for backup/restore logic and removal idempotence.
 
-Risk Notes:
-- Need careful backup/restore semantics before first deployment that overwrites an existing injection DLL (not yet implemented).
-- Network failures / rate limits not yet surfaced to user; initial implementation will log messages only.
+Risk Notes (Updated):
+- Overwrite risk mitigated by backup rename, but lack of hash/version means potential misclassification of existing mod remains.
+- Network/API failure still only produces generic toast; user lacks actionable message.
+- String-based release parsing brittle to upstream format changes.
 
-Immediate Next Step (decided): Implement Phase 1 backend minimal install logic for bleeding-edge bundle: asset discovery via GitHub API, download to cache, extract to temp work dir, deploy core files (OptiScaler.dll + OptiScaler.ini) into game directory (Steam only), and return success. Skip backups, alternate injection names, INI spoof toggling, and launch options mutation for this first incremental commit. Provide TODO markers for each deferred sub-step.
+Next Immediate Steps (Phase 1b):
+1. Invoke launch options override (optional checkbox to be added in dialog) using existing merge utility. [ ]
+2. Add INI spoof toggle editing (simple search/replace `Dxgi=auto` vs `Dxgi=false`). [ ]
+3. Introduce basic state persistence (JSON) storing injection name + simple version string (release tag) + backup created flag. [ ]
+4. Upgrade release parsing to JSON-GLib with error handling + asset selection fallback. [ ]
+5. Add alternate injection filename selector in dialog (dropdown). [ ]
 
-Subsequent Steps After This Commit:
-1. Add backup/restore + removal logic.
-2. Wire launch options auto-apply using `ensure_override` (guarded by a flag).
-3. Expand deployment to handle alternate injection filenames & spoof toggle editing.
-4. Persist per-game state JSON (hash, version, injection name).
-5. Add basic UI dialog invoking manager install/remove and showing detection state.
-6. Edge-case handling (conflict detection, running game guard, existing mod dll warning).
+Planned Later (Phase 2+):
+- Expand detection heuristics (Unreal exe scan) + per-game exe selection.
+- Advanced conflict detection (hash other mod dll; warn user).
+- Support file deployment for additional bundled libs and cleanup logic on removal.
+- Rich error surface (detail label in dialog) + retry button.
 
-Quality Gates Status:
-- Build: Passing prior to this change.
-- Tests: Existing launch options test passing; no install tests yet (will add after deployment logic stabilizes or we introduce mock download/extract).
+Quality Gates Status (Current):
+- Build: Passing (warnings: unhandled GLib.Error in dialog install/remove calls, unreachable catch clauses in manager—safe but to clean up).
+- Tests: Launch options test passing; no new tests yet for install/remove.
 
-Open Items (Short-Term):
-- Decide minimal asset selection (currently copy core dll + ini; evaluate necessity of bundled support libs next).
-- Determine reliable version string extraction (parse release tag vs ini content).
-- Evaluate need to refactor extraction into `Utils.Filesystem` for reuse (pending second use case).
+Open Items (Active):
+- Decide user-facing messaging for backup creation (inform after first overwrite?).
+- Determine minimal state JSON path & schema (likely under `~/.local/share/ProtonPlus/optiscaler/state.json`).
+- Evaluate whether to gate install when game appears running (optional pre-check).
 
-This section will be updated again after the install path is committed and tested.
+This section will be updated after launch options integration and state persistence are implemented.
 
 ## 1. Feature Shape & User Flow
 Target: “One‑click (guided) OptiScaler setup” from each Steam (and later other launcher) game row.
