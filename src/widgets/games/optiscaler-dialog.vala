@@ -3,13 +3,20 @@ namespace ProtonPlus.Widgets {
     public class OptiScalerDialog : Adw.Dialog {
         private Models.Game game;
         private Gtk.Label status_label;
-        private Gtk.Button install_button;
+    private Gtk.Button install_button;
         private Gtk.Button remove_button;
         private Gtk.Button close_button;
         private Gtk.Box button_box;
         private Gtk.Box root_box;
         private Gtk.Spinner spinner;
         private bool working = false;
+    // New controls
+    private Adw.ComboRow injection_row;
+    private Adw.SwitchRow spoof_row;
+    private Adw.SwitchRow override_row;
+    private Adw.SwitchRow preserve_ini_row;
+    private Adw.PreferencesGroup options_group;
+    private Gtk.Label error_label;
 
         public OptiScalerDialog(Models.Game game) {
             this.game = game;
@@ -41,6 +48,38 @@ namespace ProtonPlus.Widgets {
             root_box.set_margin_end(18);
             root_box.append(status_label);
             root_box.append(spinner);
+            // Build options group
+            options_group = new Adw.PreferencesGroup();
+            injection_row = new Adw.ComboRow();
+            injection_row.title = _("Injection DLL name");
+            string[] injections = {"dxgi","winmm","d3d12","dbghelp","version","wininet","winhttp"};
+            var model = new Gtk.StringList(null);
+            foreach (var s in injections) model.append(s);
+            injection_row.set_model(model);
+            injection_row.selected = 0;
+
+            spoof_row = new Adw.SwitchRow();
+            spoof_row.title = _("Disable DLSS spoofing (set Dxgi=false)");
+            spoof_row.active = false;
+
+            override_row = new Adw.SwitchRow();
+            override_row.title = _("Apply WINEDLLOVERRIDES automatically");
+            override_row.active = true;
+
+            preserve_ini_row = new Adw.SwitchRow();
+            preserve_ini_row.title = _("Preserve existing OptiScaler.ini");
+            preserve_ini_row.active = false;
+
+            options_group.add(injection_row);
+            options_group.add(spoof_row);
+            options_group.add(override_row);
+            options_group.add(preserve_ini_row);
+            root_box.append(options_group);
+
+            error_label = new Gtk.Label("");
+            error_label.add_css_class("error");
+            error_label.set_xalign(0.0f);
+            root_box.append(error_label);
             root_box.append(button_box);
 
             set_child(root_box);
@@ -80,10 +119,18 @@ namespace ProtonPlus.Widgets {
 
         private async void do_install() {
             var opts = new Models.OptiScalerManager.InstallOptions();
+            // Gather selections
+            opts.injection_name = ((Gtk.StringList) injection_row.get_model()).get_string(injection_row.selected);
+            opts.disable_spoofing = spoof_row.active;
+            opts.apply_launch_override = override_row.active;
+            opts.preserve_ini = preserve_ini_row.active;
             bool ok = yield Models.OptiScalerManager.instance.install(game, opts);
             if (!ok) {
+                var err = Models.OptiScalerManager.instance.last_error;
+                if (err != null && err.length > 0) error_label.set_label(err);
                 Application.window.add_toast(new Adw.Toast(_("OptiScaler installation failed")));
             } else {
+                error_label.set_label("");
                 Application.window.add_toast(new Adw.Toast(_("OptiScaler installed")));
             }
             set_working(false);

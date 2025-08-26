@@ -1,7 +1,7 @@
 // Launch Options utility helpers for OptiScaler integration.
 // Focus: safe insertion/merge of WINEDLLOVERRIDES for injection dll.
 
-namespace Utils {
+namespace ProtonPlus.Utils {
     public class LaunchOptions {
         // Insert or merge WINEDLLOVERRIDES for an injection target.
         // Rules:
